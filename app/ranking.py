@@ -51,13 +51,21 @@ class FlowError(RuntimeError):
 
 
 class _Dinic:
-    """Dinic max-flow on a tiny graph (<= 8 libraries, <= 30 journals)."""
+    """Dinic max-flow on a tiny graph (<= 8 libraries, <= 30 journals).
 
-    __slots__ = ("size", "graph")
+    Capacities are arbitrary-precision integers.  Each blocking-flow push is
+    seeded with the full amount leaving the source, so a push always saturates
+    an edge and the number of augmentations depends on the graph's size, never
+    on the magnitude of the counts flowing through it.
+    """
+
+    __slots__ = ("size", "graph", "level", "cursor")
 
     def __init__(self, size: int) -> None:
         self.size = size
         self.graph: list[list[list[int]]] = [[] for _ in range(size)]
+        self.level: list[int] = []
+        self.cursor: list[int] = []
 
     def add_edge(self, source: int, target: int, capacity: int) -> None:
         forward = [target, capacity, len(self.graph[target])]
@@ -65,39 +73,41 @@ class _Dinic:
         self.graph[source].append(forward)
         self.graph[target].append(backward)
 
+    def _push(self, node: int, limit: int, sink: int) -> int:
+        if node == sink:
+            return limit
+        while self.cursor[node] < len(self.graph[node]):
+            edge = self.graph[node][self.cursor[node]]
+            target, capacity, reverse = edge
+            if capacity > 0 and self.level[target] == self.level[node] + 1:
+                amount = self._push(target, min(limit, capacity), sink)
+                if amount:
+                    edge[1] -= amount
+                    self.graph[target][reverse][1] += amount
+                    return amount
+            self.cursor[node] += 1
+        return 0
+
     def max_flow(self, source: int, sink: int) -> int:
         flow = 0
+        # The network can never move more than the source can give out; using
+        # that bound (instead of a fixed 2**60) keeps every push saturating.
+        supply = sum(capacity for _, capacity, _ in self.graph[source])
         while True:
-            level = [-1] * self.size
-            level[source] = 0
+            self.level = [-1] * self.size
+            self.level[source] = 0
             queue = deque([source])
             while queue:
                 node = queue.popleft()
                 for target, capacity, _ in self.graph[node]:
-                    if capacity > 0 and level[target] < 0:
-                        level[target] = level[node] + 1
+                    if capacity > 0 and self.level[target] < 0:
+                        self.level[target] = self.level[node] + 1
                         queue.append(target)
-            if level[sink] < 0:
+            if self.level[sink] < 0:
                 return flow
-            cursor = [0] * self.size
-
-            def push(node: int, limit: int) -> int:
-                if node == sink:
-                    return limit
-                while cursor[node] < len(self.graph[node]):
-                    edge = self.graph[node][cursor[node]]
-                    target, capacity, reverse = edge
-                    if capacity > 0 and level[target] == level[node] + 1:
-                        amount = push(target, min(limit, capacity))
-                        if amount:
-                            edge[1] -= amount
-                            self.graph[target][reverse][1] += amount
-                            return amount
-                    cursor[node] += 1
-                return 0
-
+            self.cursor = [0] * self.size
             while True:
-                amount = push(source, 1 << 60)
+                amount = self._push(source, supply, sink)
                 if not amount:
                     break
                 flow += amount
@@ -257,7 +267,7 @@ def save_results(
             (
                 period,
                 verdict["journal_no"],
-                verdict["total_downloads"],
+                str(verdict["total_downloads"]),
                 json.dumps(verdict["support"], separators=(",", ":")),
                 now,
             )
@@ -270,7 +280,7 @@ def load_results(connection: sqlite3.Connection, period: str) -> list[dict[str, 
     return [
         {
             "journal_no": row["journal_no"],
-            "total_downloads": row["total_downloads"],
+            "total_downloads": int(row["total_downloads"]),
             "support": json.loads(row["support_json"]),
         }
         for row in connection.execute(

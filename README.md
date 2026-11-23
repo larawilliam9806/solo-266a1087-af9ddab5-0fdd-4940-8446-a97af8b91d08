@@ -58,10 +58,19 @@ Other reads: `GET /periods/{period}` (parameters), `GET
 - **Every possible winner, ties included.** The verdict is exact, not a
   sample: a journal is listed when some completion makes its total at least
   every other journal's.
+- **Arbitrarily large counts.** Download numbers are exact integers with no
+  64-bit ceiling: a monthly total or a city-wide total may exceed
+  `2**63 - 1`. The API keeps sending and receiving plain JSON integers (every
+  digit preserved), while SQLite stores the counts as exact decimal strings.
+  A database created by an older version with `INTEGER` columns is migrated
+  automatically on startup — its reports and verdicts stay queryable with
+  their original values.
 - **No enumeration of completions.** Each journal's best reachable total is
   computed arithmetically; whether rivals can be held below that bar is one
   max-flow over the libraries and journals. The flow's assignment is the
-  support table returned with the journal.
+  support table returned with the journal. With the journals and libraries
+  fixed, the flow's work depends only on the size of that graph, never on how
+  large the download counts are.
 - **Same-transaction effect.** A report, the month's parameters and the
   recomputed verdict change in one SQLite transaction. If a report cannot be
   completed or anything fails to save, everything rolls back and the previous

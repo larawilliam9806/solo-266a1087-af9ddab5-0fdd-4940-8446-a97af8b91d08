@@ -94,6 +94,8 @@ def save_report(
         (period, library_no),
     ).fetchone()
     revision = 1 if previous is None else previous["revision"] + 1
+    # TEXT columns hold the exact decimal form; values beyond the signed
+    # 64-bit range must never hit SQLite's INTEGER conversion.
     connection.execute(
         "INSERT INTO reports (period, library_no, top_json, total_downloads,"
         " tail_downloads, revision, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
@@ -107,8 +109,8 @@ def save_report(
             period,
             library_no,
             _encode(report),
-            report.total_downloads,
-            tail,
+            str(report.total_downloads),
+            str(tail),
             revision,
             utc_now(),
         ),

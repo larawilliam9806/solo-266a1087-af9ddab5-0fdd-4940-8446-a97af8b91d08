@@ -8,6 +8,7 @@ of "which journals appear tied for the maximum in at least one completion".
 import itertools
 import random
 
+import app.ranking as ranking
 from app.ranking import LibraryInput, champions
 
 
@@ -119,3 +120,60 @@ def test_every_support_table_is_a_valid_completion():
             assert seen_libraries == {library.library_no for library in libraries}
             assert city[entry["journal_no"]] == entry["total_downloads"]
             assert max(city.values()) == entry["total_downloads"]
+
+
+def test_flow_work_does_not_grow_with_download_magnitude():
+    """With journals and libraries fixed, completion work is magnitude-free.
+
+    Scaling every count by a huge factor must not change the number of flow
+    pushes (the old fixed 1 << 60 push limit would multiply the augmentations
+    once totals outgrew it), while the answers stay exact.
+    """
+    state = {"pushes": 0}
+    original_push = ranking._Dinic._push
+
+    def counted_push(self, node, limit, sink):
+        state["pushes"] += 1
+        return original_push(self, node, limit, sink)
+
+    ranking._Dinic._push = counted_push
+    try:
+        journals = [f"J{index}" for index in range(30)]
+
+        def build(scale):
+            # Each library lists one journal and leaves the other 29 with a
+            # positive remainder to route, so every flow has real demand.
+            return [
+                LibraryInput(
+                    f"L{index}",
+                    ((f"J{index}", scale),),
+                    scale + 29 * scale,
+                )
+                for index in range(8)
+            ]
+
+        def run(scale):
+            state["pushes"] = 0
+            libraries = build(scale)
+            verdicts = champions(journals, libraries)
+            return state["pushes"], verdicts, libraries
+
+        small_pushes, small, small_libraries = run(10)
+        factor = 10**100
+        big_pushes, big, big_libraries = run(10 * factor)
+    finally:
+        ranking._Dinic._push = original_push
+
+    # Every small-scale library has unlisted remainder: pushes really happen.
+    assert all(library.remainder > 0 for library in small_libraries)
+    assert small_pushes > 0
+    assert big_pushes == small_pushes
+    assert [entry["journal_no"] for entry in small] == [
+        entry["journal_no"] for entry in big
+    ]
+    for small_entry, big_entry in zip(small, big):
+        assert big_entry["total_downloads"] == small_entry["total_downloads"] * factor
+        for library in big_entry["support"]:
+            counts = [row["downloads"] for row in library["downloads"]]
+            assert all(isinstance(value, int) for value in counts)
+            assert sum(counts) == 30 * 10 * factor
